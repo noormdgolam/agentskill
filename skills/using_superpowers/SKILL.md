@@ -7,5 +7,5 @@ description: Use when starting any conversation - establishes how to find and us
 
 ## Core Directives
 1. **Always Check Local Skills**: Before executing complex architectural, i18n, design, or language tasks, inspect available skills in `.agents/skills/`.
-2. **Proactive Application**: When a task matches an active skill (`bangla_mastery`, `frontend_developer`, `responsive_web_mastery`, `i18n_translation_mastery`, `web_performance_seo`, `duplicate_handler_debugging`), strictly follow its documented rules and constraints.
+2. **Proactive Application**: When a task matches an active skill (`bangla_mastery`, `frontend_developer`, `responsive_web_mastery`, `i18n_translation_mastery`, `web_performance_seo`, `duplicate_handler_debugging`, `multi_surface_data_consistency_audit`), strictly follow its documented rules and constraints.
 3. **Execution Rigor**: Ensure clean code, verified syntax, responsive alignments, and zero broken assets.
