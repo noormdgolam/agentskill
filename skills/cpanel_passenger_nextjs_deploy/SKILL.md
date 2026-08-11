@@ -171,6 +171,69 @@ function run(label, cmd) {
 ```
 Delete it once the deploy is healthy — it's a diagnostic tool, not part of the app.
 
+### 11. cPanel's own "SSH Access" page authorizes a key, but the shell still refuses it
+On InterServer (and shared cPanel hosting generally), shell/SSH access is **disabled at
+the account level by default** — a setting separate from and invisible in cPanel's own
+"SSH Access" page. You can generate/import a key there, it'll show status "authorized",
+and `ssh -v` will show the server correctly offering and then rejecting that exact key
+(`Permission denied (publickey,gssapi-keyex,gssapi-with-mic,password)` for every method,
+not just yours) — because the account has no real shell at all, independent of key
+config. **Fix**: this needs the host's support team to flip an account-level flag; ask
+for "shell/SSH access enabled for account X" by name. Don't spend time re-generating or
+re-importing keys chasing this — verbose SSH output (`ssh -v`) confirming the key was
+correctly *offered* and still rejected for every auth method is the tell that it's not a
+key problem.
+
+### 12. cPanel's port 2083 can sit behind a bot-protection layer that blocks API tokens too
+A valid `Authorization: cpanel user:token` API request can still get a 200 response
+containing an HTML "One moment, please..." interstitial (auto-reloading via
+`setTimeout`/`window.location.reload()`) instead of JSON — check the `Server` response
+header: cPanel's own daemon doesn't say `Server: openresty`. This is a separate
+reverse-proxy/anti-bot layer in front of the port, and it blocks scripted clients
+(different hostname, different User-Agent, added browser-like headers, waiting between
+requests — none of it helps, because it requires actual JS execution). **Don't** burn
+time trying to spoof past it. **Fix**: use FTP/FTPS instead (see Gotcha 13) — it's a
+different port/protocol, unaffected by this layer, and cPanel-created FTP accounts can be
+scoped to a single subdirectory (e.g. the app root only) for least-privilege access.
+
+### 13. Automating file sync without shell: FTPS + a resumable, idempotent uploader
+When both SSH (Gotcha 11) and the API (Gotcha 12) are blocked, a cPanel FTP account
+scoped to the app directory (**FTP Accounts** → Directory: the app root) still works and
+sidesteps both. Node's `basic-ftp` package handles explicit FTPS cleanly:
+```js
+await client.access({ host, port: 21, user, password,
+  secure: true, secureOptions: { rejectUnauthorized: false } }); // cert is usually self-signed
+```
+Sustained transfers over this kind of link are **not reliable** — expect `ECONNRESET` on
+both control and data sockets partway through a large `uploadFromDir`. Don't treat that
+as a one-shot operation. Instead, write the sync as a loop that: lists the remote tree
+recursively, diffs by (relative path, size) against the local tree, uploads only what's
+missing/mismatched, and reconnects-and-repeats until zero files remain pending. This
+makes every failure a no-op retry instead of lost progress — verified converging in 4
+rounds (391 files, 2 mid-transfer connection resets) against a real flaky link.
+
+**Building without CI**: if the project has zero native/compiled dependencies (check for
+things like `bcrypt` (use `bcryptjs` instead), `sharp`, or any package with a native
+addon — this project deliberately avoided all of them, see the parent skill), a
+standalone Next.js build produced on any OS is byte-identical in behavior on the Linux
+server, since Prisma 7's runtime engine is WASM (not a native binary, unlike Prisma <7)
+and Next's own output is plain JS. This means you can build locally and skip GitHub
+Actions/artifact-download entirely for the sync path — confirm you're shipping the exact
+build you think you are by comparing `.next/BUILD_ID` locally vs. the uploaded copy
+byte-for-byte, don't just trust "the upload finished."
+
+### 14. Don't delete the live `.next` before the replacement is verified complete
+Passenger doesn't reload a running app just because files on disk changed underneath it
+— it keeps serving from the already-loaded process until something restarts it (a
+manual `tmp/restart.txt` touch, a crash, or an idle-timeout recycle). That's a safety net
+*if* you haven't already deleted the old build: deleting `.next` first (to sidestep
+uncertain overwrite/merge semantics — see Gotcha 3's cousin problem with the File Manager
+UI) and then having the reupload fail partway leaves a window where any restart trigger
+(including one outside your control) serves from a broken, incomplete `.next`. **Safer
+pattern**: sync the new build into a fresh directory alongside the live one, verify it's
+complete (Gotcha 13's `BUILD_ID` check), and only *then* remove the old one and touch
+`restart.txt` — never delete-then-reupload in place.
+
 ## Deployment checklist (order matters)
 1. `output: "standalone"` in `next.config.ts`; lazy DB client (Gotcha 2).
 2. CI workflow: `npm ci` → `prisma generate` → `next typegen` (Gotcha 1) → type-check →
@@ -188,10 +251,15 @@ Delete it once the deploy is healthy — it's a diagnostic tool, not part of the
    app root, overwriting `public/` and `.next/` fully rather than merging.
 6. "Run NPM Install" from the UI (Gotcha 7); if the app still won't start, check
    `stderr.log` before assuming the install actually finished (Gotcha 8).
-7. Restart the app from the UI. Verify live: fetch a known `public/` file (confirms
+7. Restart the app from the UI (or `touch tmp/restart.txt` if you have file access but
+   not the UI — same effect). Verify live: fetch a known `public/` file (confirms
    Gotcha 3/4 didn't regress), fetch `/api/auth/providers` (confirms OAuth env vars and
    callback URLs), and confirm a dashboard-style protected route redirects rather than
    500s for a logged-out request.
+
+**If SSH and the API are both unavailable** (Gotchas 11–12), steps 5–7 can be done
+end-to-end over a scoped FTP account instead of File Manager clicks — see Gotcha 13 for
+the resumable-uploader pattern and Gotcha 14 for the safe delete/swap order.
 
 ## Post-deploy verification pattern
 Don't trust "the page loads" alone — a stale partial deploy can look fine at a glance
