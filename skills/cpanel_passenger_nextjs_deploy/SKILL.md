@@ -182,7 +182,10 @@ config. **Fix**: this needs the host's support team to flip an account-level fla
 for "shell/SSH access enabled for account X" by name. Don't spend time re-generating or
 re-importing keys chasing this — verbose SSH output (`ssh -v`) confirming the key was
 correctly *offered* and still rejected for every auth method is the tell that it's not a
-key problem.
+key problem. Before writing shell off entirely, though, check cPanel's browser-based
+**Terminal** feature (Advanced section) — it's a genuinely separate capability from SSH
+and isn't gated by this same restriction (see Gotcha 16), though it has its own failure
+mode when the account is already resource-maxed.
 
 ### 12. cPanel's port 2083 can sit behind a bot-protection layer that blocks API tokens too
 A valid `Authorization: cpanel user:token` API request can still get a 200 response
@@ -233,6 +236,66 @@ UI) and then having the reupload fail partway leaves a window where any restart 
 pattern**: sync the new build into a fresh directory alongside the live one, verify it's
 complete (Gotcha 13's `BUILD_ID` check), and only *then* remove the old one and touch
 `restart.txt` — never delete-then-reupload in place.
+
+### 15. Every restart leaks a duplicate worker process — Passenger doesn't cleanly replace the old one
+Neither the UI's "Restart" button nor touching `tmp/restart.txt` reliably terminates
+the previous worker before spawning a new one on this stack — confirmed with a direct
+before/after process count on a real account (24 → 33 processes from a single restart,
+zero reduction). Enough restarts over a session (a dozen-plus deploy iterations in one
+sitting is not unusual) silently accumulates duplicates until the account's process
+limit is hit. From the outside this looks like the site suddenly serving every request
+in 15–25s with the DB pool exhausted (`active=0 idle=0`, every query timing out) — and
+it can cascade into cPanel's own Terminal failing too (`cagefs_enter: Unable to fork` —
+no free process slot to fork a new shell into). **Fix**: don't treat restarts as free —
+batch multiple changes into one restart rather than one per change (see the parent
+project's own note on this), and deploy the automated cleanup safety net in Gotcha 16
+rather than relying on manual vigilance.
+
+### 16. Automated leak cleanup for Gotcha 15: a cron job that kills every duplicate except the newest — no SSH needed
+cPanel's browser-based **Terminal** (Advanced section) is a genuinely different
+capability from SSH (Gotcha 11) — it isn't gated by the same account-level shell
+restriction, and gives a real (if manually-relayed, not scriptable-from-outside) shell
+prompt. The one catch: it needs a free process slot to even fork itself, so it fails
+with the exact same `cagefs_enter: Unable to fork` error once the account is already
+maxed out by Gotcha 15's leak — chicken-and-egg, not fixable from inside Terminal at
+that point; needs the host's support team to force-clear something server-side once it
+gets that bad.
+
+The real fix is **cPanel Cron Jobs** — a separate, always-available feature,
+independent of SSH/Terminal entirely — running a cleanup script periodically:
+```bash
+# ps aux shows each Node.js Selector process as "lsnode:/home/<user>/<app-path>" —
+# find all matches, keep only the newest (last in ps output = most recently
+# started), kill every earlier one.
+SEARCHSTRING="lsnode:/home/<user>/<app-path>"
+MATCHES=$(ps -aux | grep "$SEARCHSTRING" | grep -v grep)
+prev_line=""
+while IFS= read -r line; do
+  [ -z "$line" ] && continue
+  if [ -n "$prev_line" ]; then
+    pid=$(echo "$prev_line" | awk '{print $2}')
+    kill -SIGKILL "$pid" 2>/dev/null
+  fi
+  prev_line=$line
+done <<<"$MATCHES"
+```
+Wire it into a cPanel Cron Job (`*/15 * * * * /bin/bash /path/to/cleanup.sh`) — once set
+up this needs zero shell access to keep running, and the script itself can be uploaded
+over the same scoped FTP account from Gotcha 13.
+
+**Two gotchas hit setting this up, both worth avoiding next time**:
+- Don't derive paths via `dirname "$(realpath "$0")"` inside the script — `realpath`
+  isn't guaranteed present in a minimal cron execution environment (CageFS jail), and
+  its absence fails the whole script silently before it writes a single log line.
+  Hardcode absolute paths instead.
+- **The `<app-path>` in `lsnode:/home/<user>/<app-path>` is the app's internal Node.js
+  Selector identifier, which can differ from its actual filesystem/FTP directory name**
+  — don't assume they match just because the FTP/deploy path "looks obviously right."
+  Verify with a live `ps aux | grep lsnode` first. A search string that's silently wrong
+  matches zero processes forever, and a dry-run reporting "nothing to clean" then looks
+  identical to a real, healthy "genuinely nothing to clean" — always log the match
+  *count* on every run, not just kill actions, so a silent false-negative doesn't get
+  mistaken for a working safety net.
 
 ## Deployment checklist (order matters)
 1. `output: "standalone"` in `next.config.ts`; lazy DB client (Gotcha 2).
