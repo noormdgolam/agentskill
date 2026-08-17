@@ -297,6 +297,36 @@ over the same scoped FTP account from Gotcha 13.
   *count* on every run, not just kill actions, so a silent false-negative doesn't get
   mistaken for a working safety net.
 
+### 17. Confirming Gotcha 11 properly: SSH is blocked at the account's hosting *package* level, not by the key
+Don't stop at "SSH doesn't work" — pin down *why*, because "authorized key rejected" has
+several different real causes and only one of them (this one) is unfixable without the
+host's support team. Diagnostic sequence that actually distinguishes them:
+- **Is the port even reachable?** `ssh -o BatchMode=yes -i <any-key> user@host "cmd"` —
+  ignore the auth outcome, read the *connection* outcome. `Connection timed out` means
+  the port is filtered/closed at the network level (nothing listening, or a firewall
+  drop). `Permission denied (publickey,...)` means the TCP+SSH-protocol handshake
+  *succeeded* — the daemon is reachable and responded, only auth was rejected. These are
+  completely different problems; don't conflate them.
+- Some shared-hosting providers put SSH on a non-standard port (2222 is the common
+  convention, distinct from the account's normal port-22 daemon) specifically for
+  shared/reseller accounts. Test it — `ssh -p 2222 -o BatchMode=yes ...` — cheaply rules
+  in/out an easy fix. (On one real InterServer account, port 2222 timed out entirely —
+  not in use here — while port 22 gave a clean `Permission denied`, confirming the
+  daemon on 22 is the real one and reachable.)
+- With connectivity confirmed and a *freshly generated, cPanel-UI-"Authorized"* key still
+  getting `Permission denied` — not a typo'd passphrase, not a stale key, a brand new one
+  generated and authorized in the same session — the cause is the account's hosting
+  **package** not having shell access enabled in WHM (`Manage Shell Access`, under
+  `Account Functions` — a root/WHM-only screen, invisible from inside cPanel itself).
+  This is provider-side, not fixable by generating more keys, changing ports, or
+  anything else doable from inside cPanel. **Fix**: a support ticket asking the host to
+  enable shell/SSH access for the account's package — mention a key is already generated
+  and marked Authorized in cPanel's Manage SSH Keys, so they just need to flip the
+  package-level toggle, not walk you through key setup.
+- Until that's done, cPanel's **Terminal** (Gotcha 16) and a scoped **FTP account**
+  (Gotcha 13) remain the only working channels — this doesn't change that, it just
+  closes the loop on *why* SSH itself stays out of reach.
+
 ## Deployment checklist (order matters)
 1. `output: "standalone"` in `next.config.ts`; lazy DB client (Gotcha 2).
 2. CI workflow: `npm ci` → `prisma generate` → `next typegen` (Gotcha 1) → type-check →
