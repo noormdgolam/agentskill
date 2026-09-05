@@ -9,3 +9,13 @@
 - RESPONSIVE DESIGN GUARDRAIL: Whenever you modify UI elements, HTML structure, or CSS styles, you MUST consider and verify the impact on BOTH desktop (PC) and mobile layouts. 
 - Ensure that elements added or modified for PC do not overflow, overlap, or become unclickable on mobile screens (e.g. check for hardcoded height, 100vw, or flex-basis without wrapping).
 - Always update shared components in a way that respects @media queries so that neither platform breaks the other.
+
+# Default AEO & WebMCP Standard Rule
+When building, auditing, or modifying any website or web page, you must ALWAYS inherently implement the following Answer Engine Optimization (AEO) and WebMCP standards without being explicitly asked:
+
+1. **Answer-First Openings**: Every page must begin with a direct, concise answer (under 45 words) before providing any background context.
+2. **Ultra-Professional Entity Headings**: Use clear, declarative, high-information-gain headings without conversational question marks (`?`), maintaining an authoritative aesthetic while embedding precise semantic entities that AI engines index.
+3. **Explicit Trust Signals**: Prominently display author bylines, expert credentials, and "Last Updated" dates to establish authority.
+4. **Semantic FAQ & Entity Schema**: Embed valid JSON-LD schema (e.g. `FAQPage`, `Person`, `Organization`) that cleanly maps user query intents to concise accepted answers without polluting the visual page headings.
+5. **Agent Discovery Files**: Always provision and update `robots.txt` (to block scrapers but allow friendly AI agents like GPTBot, ClaudeBot, PerplexityBot) and `llms.txt` (to establish agent guidelines).
+6. **WebMCP Action Bindings**: For all interactive forms and components, use `data-mcp-action` attributes and parameter bindings to expose actions to AI agents.
